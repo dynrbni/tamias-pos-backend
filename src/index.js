@@ -7,9 +7,13 @@ const productsRouter = require('./routes/products');
 const transactionsRouter = require('./routes/transactions');
 const authRouter = require('./routes/auth');
 const storesRouter = require('./routes/stores');
+const dashboardRouter = require('./routes/dashboard');
+const employeesRouter = require('./routes/employees');
+const customersRouter = require('./routes/customers');
+const categoriesRouter = require('./routes/categories');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 7878;
 
 // Middleware
 app.use(cors());
@@ -25,6 +29,10 @@ app.use('/api/products', productsRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/stores', storesRouter);
+app.use('/api/dashboard', dashboardRouter);
+app.use('/api/employees', employeesRouter);
+app.use('/api/customers', customersRouter);
+app.use('/api/categories', categoriesRouter);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

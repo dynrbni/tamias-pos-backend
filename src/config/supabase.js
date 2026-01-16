@@ -10,4 +10,4 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-module.exports = supabase;
+module.exports = { supabase };
