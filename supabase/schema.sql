@@ -56,7 +56,39 @@ begin
   if not exists (select 1 from information_schema.columns where table_name = 'stores' and column_name = 'description') then
     alter table public.stores add column description text;
   end if;
+  -- NEW: Short 8-digit ID for Customer Display
+  if not exists (select 1 from information_schema.columns where table_name = 'stores' and column_name = 'display_id') then
+    alter table public.stores add column display_id text unique;
+    
+    -- Populate existing stores with random 8-digit IDs
+    update public.stores 
+    set display_id = floor(10000000 + random() * 90000000)::text
+    where display_id is null;
+  end if;
 end $$;
+
+-- Function to ensure display_id is generated on insert
+create or replace function public.set_display_id()
+returns trigger as $$
+begin
+  if new.display_id is null then
+    -- Generate random 8-digit number
+    new.display_id := floor(10000000 + random() * 90000000)::text;
+    
+    -- Ensure uniqueness (simple retry logic could be added but collision prob is low for this scale)
+    while exists (select 1 from public.stores where display_id = new.display_id) loop
+      new.display_id := floor(10000000 + random() * 90000000)::text;
+    end loop;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+-- Trigger for display_id
+drop trigger if exists on_store_created_set_id on public.stores;
+create trigger on_store_created_set_id
+  before insert on public.stores
+  for each row execute procedure public.set_display_id();
 
 -- Profiles table (extends auth.users)
 create table if not exists public.profiles (
@@ -141,15 +173,32 @@ create table if not exists public.employees (
   id uuid primary key default uuid_generate_v4(),
   store_id uuid references public.stores on delete cascade not null,
   user_id uuid references auth.users on delete set null,
+  employee_id text unique, -- 10-digit unique ID for login
   name text not null,
   email text,
   phone text,
   role text default 'cashier',
   salary integer default 0,
+  pin text, -- Password for login
+  avatar_url text,
   is_active boolean default true,
   joined_at timestamptz default now(),
   created_at timestamptz default now()
 );
+
+-- Add missing columns to employees
+do $$ 
+begin
+  if not exists (select 1 from information_schema.columns where table_name = 'employees' and column_name = 'employee_id') then
+    alter table public.employees add column employee_id text unique;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'employees' and column_name = 'pin') then
+    alter table public.employees add column pin text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name = 'employees' and column_name = 'avatar_url') then
+    alter table public.employees add column avatar_url text;
+  end if;
+end $$;
 
 -- Transactions table
 create table if not exists public.transactions (
@@ -421,6 +470,11 @@ create policy "Users can update own profile" on public.profiles
   for update using (id = auth.uid());
 
 -- Products policies
+-- Allow public access for mobile app (no Supabase auth)
+drop policy if exists "Public can access products" on public.products;
+create policy "Public can access products" on public.products
+  for all using (true);
+
 create policy "Users can view products in their store" on public.products
   for select using (store_id = get_user_store_id());
 
@@ -428,6 +482,10 @@ create policy "Users can manage products" on public.products
   for all using (store_id = get_user_store_id());
 
 -- Transactions policies
+drop policy if exists "Public can access transactions" on public.transactions;
+create policy "Public can access transactions" on public.transactions
+  for all using (true);
+
 create policy "Users can view transactions in their store" on public.transactions
   for select using (store_id = get_user_store_id());
 
@@ -435,14 +493,27 @@ create policy "Users can create transactions" on public.transactions
   for insert with check (store_id = get_user_store_id());
 
 -- Customers policies
+drop policy if exists "Public can access customers" on public.customers;
+create policy "Public can access customers" on public.customers
+  for all using (true);
+
 create policy "Users can manage customers" on public.customers
   for all using (store_id = get_user_store_id());
 
 -- Employees policies
+-- Allow public read for login (by employee_id)
+drop policy if exists "Public can read employees for login" on public.employees;
+create policy "Public can read employees for login" on public.employees
+  for select using (true);
+
 create policy "Users can manage employees" on public.employees
   for all using (store_id = get_user_store_id());
 
 -- Categories policies
+drop policy if exists "Public can access categories" on public.categories;
+create policy "Public can access categories" on public.categories
+  for all using (true);
+
 create policy "Users can manage categories" on public.categories
   for all using (store_id = get_user_store_id());
 
@@ -495,3 +566,22 @@ grant execute on function get_dashboard_stats(uuid) to authenticated;
 grant execute on function get_sales_chart(uuid, integer) to authenticated;
 grant execute on function get_top_products(uuid, integer) to authenticated;
 grant execute on function get_user_store_id() to authenticated;
+
+-- ============================================
+-- FIXES (Added by AI)
+-- ============================================
+
+-- Fix: Transactions should reference employees table, NOT auth.users
+-- This allows cashier_id (employee.id) to be stored correctly
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'transactions_cashier_id_fkey') THEN
+    ALTER TABLE public.transactions DROP CONSTRAINT transactions_cashier_id_fkey;
+  END IF;
+  
+  ALTER TABLE public.transactions 
+  ADD CONSTRAINT transactions_cashier_id_fkey 
+  FOREIGN KEY (cashier_id) 
+  REFERENCES public.employees(id) 
+  ON DELETE SET NULL;
+END $$;
